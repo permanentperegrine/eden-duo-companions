@@ -17,7 +17,7 @@ mailbox_adrp:
 mailbox_add:
     add x19, x19, :lo12:bridge_mailbox
     mov w17, #0x5544
-    movk w17, #0x494f, lsl #16
+    movk w17, #0x4a4f, lsl #16
     str w17, [x19]
     ldr w17, [x19, #4]
     add w17, w17, #1
@@ -73,6 +73,8 @@ pending_request:
     b.eq map_edit_request
     cmp w12, #5
     b.eq quest_request
+    cmp w12, #15
+    b.eq inventory_request
     cmp w12, #8
     b.eq inventory_request
     cmp w12, #7
@@ -476,8 +478,11 @@ inventory_request:
     b.ne refused
     ldr w24, [x19, #24]
     ldr w10, [x19, #20]
+    cmp w10, #15
+    b.eq inventory_plain_slot
     cmp w10, #8
     b.ne inventory_gear_slot
+inventory_plain_slot:
     cmp w24, #7
     b.ne refused
     b inventory_empty_slot
@@ -598,6 +603,14 @@ inventory_list_loop:
     cmp w9, w10
     b.ne inventory_unlock
     ldr w10, [x19, #20]
+    cmp w10, #15
+    b.ne inventory_not_drop_type
+    cmp w9, #3
+    b.hi inventory_unlock
+    cmp w9, #2
+    b.eq inventory_unlock
+    b inventory_type_ready
+inventory_not_drop_type:
     cmp w10, #8
     b.ne inventory_gear_type
     sub w10, w9, #7
@@ -697,6 +710,12 @@ inventory_name_done:
     cbz w0, inventory_unlock
     b inventory_pair_ready
 inventory_remove_check:
+    cmp w9, #15
+    b.ne inventory_not_drop_check
+    bl inventory_remove_location
+    cbz w0, inventory_unlock
+    b inventory_pair_ready
+inventory_not_drop_check:
     cmp w9, #7
     b.ne inventory_equip_pair
     bl inventory_remove_location
@@ -735,6 +754,8 @@ inventory_validate_commit:
 .global inventory_commit
 inventory_commit:
     ldr w9, [x19, #20]
+    cmp w9, #15
+    b.eq inventory_drop_commit
     cmp w9, #8
     b.eq consume_commit
     cmp w9, #7
@@ -809,6 +830,19 @@ inventory_job_pair_ready:
     str x21, [x19, #208]
     str w24, [x19, #164]
     str w20, [x19, #160]
+    b successful
+// Inventory Drop. The pause menu's own Drop for a non-stackable item (weapon/bow/shield) is the
+// generic native Hold routine called with the item's cache column and row: its non-CanStack
+// branch drops the item instead of reserving it for the carry tray. Everything validated above
+// (exact pouch row, identity, modifiers, unequipped, idle creator) holds under the pouch lock.
+// No creation job is armed and no result is read back here: the companion confirms by pouch state.
+inventory_drop_commit:
+    mov x0, x21
+    ldr w1, [x19, #304]
+    ldr w2, [x19, #308]
+    bl native_hold
+    add x0, x21, #0x48
+    bl native_pouch_unlock
     b successful
 inventory_unlock:
     add x0, x21, #0x48

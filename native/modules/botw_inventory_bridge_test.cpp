@@ -635,5 +635,42 @@ int main() {
   for(size_t i=0;i<items.size();++i)if(items[i]->address==F::One)one=int64_t(i);
   f.state.bridge.remove_supported=false;assert(!on_action(&f.state,"inventory_drag_use",one));assert(f.get<uint32_t>(8)==0);++cases;}
  {F f;f.state.context=botw::UiContext::World;assert(!on_action(&f.state,"inventory_drag_hold",0));assert(!on_action(&f.state,"inventory_drag_hold",-1));assert(f.get<uint32_t>(8)==0);++cases;}
+
+ assert(botw::SelectionBridge::helper_level(0x4A4F5544)==16 && botw::SelectionBridge::helper_level(0x494F5544)==15 && !botw::SelectionBridge::helper_level(0x4B4F5544));++cases;
+ // Inventory Drop (helper DUOJ, command 15; the held-tray fixture lives in botw_hold_test, so hold_supported is cleared here): unequipped Weapon/Bow/Shield only; the request carries the
+ // exact native cache location, and completion is confirmed by the row leaving the pouch.
+ {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::One+0x24,0);f.put<uint8_t>(F::Two+0x24,0);f.state.data=botw::pouch(f.h);
+  assert(f.state.bridge.drop_supported && on_action(&f.state,"inventory_drop",0));
+  assert(f.get<uint32_t>(20)==15 && f.get<uint32_t>(24)==7 && f.get<uint32_t>(28)==0 && f.get<uint32_t>(304)==0 && f.get<uint32_t>(308)==0);
+  assert(f.get<uint64_t>(40)==F::Two && f.get<uint32_t>(8)==1 && f.stores.back()==8);
+  f.mb<uint32_t>(12,1);f.mb<uint32_t>(16,1);f.state.bridge.poll(f.h,{});assert(f.state.bridge.pending);
+  f.put<int32_t>(F::Two+0x20,0);f.state.bridge.poll(f.h,{});
+  assert(!f.state.bridge.pending && std::string(f.state.bridge.status)=="Dropped");++cases;}
+ {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::One+0x24,0);f.put<uint8_t>(F::Two+0x24,0);f.state.data=botw::pouch(f.h);
+  assert(on_action(&f.state,"inventory_drop",0));f.mb<uint32_t>(12,1);f.mb<uint32_t>(16,1);
+  f.state.bridge.poll(f.h,{});assert(f.state.bridge.pending);
+  f.state.bridge.requested-=std::chrono::seconds(4);f.state.bridge.poll(f.h,{});
+  assert(!f.state.bridge.pending && std::string(f.state.bridge.status)=="Drop sent");++cases;}
+ {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::One+0x24,0);f.put<uint8_t>(F::Two+0x24,0);f.state.data=botw::pouch(f.h);
+  assert(on_action(&f.state,"inventory_drop",0));f.mb<uint32_t>(12,1);f.mb<uint32_t>(16,2);f.state.bridge.poll(f.h,{});
+  assert(!f.state.bridge.pending && std::string(f.state.bridge.status)=="Drop refused");++cases;}
+ for(unsigned slot:{1u,2u}) {F f;f.removable(slot,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::Two+0x24,0);f.state.data=botw::pouch(f.h);
+  assert(on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(28)==(slot==1?3u:1u));++cases;}
+ // Older helpers (DUOI and earlier) have no command 15: the action must refuse without writing a request.
+ for(uint32_t magic:{0x494F5544u,0x394F5544u}) {F f;f.removable(0,magic);f.put<uint8_t>(F::Two+0x24,0);f.state.data=botw::pouch(f.h);
+  assert(!f.state.bridge.drop_supported && !on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(8)==0);++cases;}
+ // Equipped rows, armor, arrows, food and zero-durability rows are never droppable.
+ {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::Two+0x24,1);f.state.data=botw::pouch(f.h);
+  assert(!on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(8)==0);++cases;}
+ for(int type:{2,4,5,6,7,8,9}) {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::Two+0x24,0);f.put<int32_t>(F::Two+0x18,type);f.state.data=botw::pouch(f.h);
+  assert(!on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(8)==0);++cases;}
+ {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::Two+0x24,0);f.put<int32_t>(F::Two+0x20,0);f.state.data=botw::pouch(f.h);
+  assert(!on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(8)==0);++cases;}
+ // A missing native cache row or a failed mailbox store never leaves a half-written request armed.
+ {F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::Two+0x24,0);f.put<uint64_t>(F::Pouch+0x44230,0);f.state.data=botw::pouch(f.h);
+  assert(!on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(8)==0);++cases;}
+ for(uint32_t at:{16,20,24,28,32,40,56,76,80,96,104,112,124,128,132,304,308}) {
+  F f;f.removable(0,0x4A4F5544);f.state.bridge.hold_supported=false;f.put<uint8_t>(F::Two+0x24,0);f.state.data=botw::pouch(f.h);f.fail=at;
+  assert(!on_action(&f.state,"inventory_drop",0) && f.get<uint32_t>(8)==0);++cases;}
  std::cout<<cases<<" inventory bridge identity/publication/actor-confirmation cases passed\n";
 }

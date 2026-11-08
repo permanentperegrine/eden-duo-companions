@@ -829,7 +829,7 @@ void sample(void *p, const EdenDsmodHostApi *h) {
     s.inventory_status_shown=!quest_status&&status_fresh&&s.bridge.status&&*s.bridge.status;
     h->publish_text(h->userdata,"botw.inventory.status",s.inventory_status_shown ? s.bridge.status : "");
     h->publish_i64(h->userdata,"botw.selection.pending",s.bridge.pending!=0 || s.quest_deferred);
-    bool equip_available=false,remove_available=false,consume_available=false;
+    bool equip_available=false,remove_available=false,consume_available=false,drop_available=false;
     { BOTW_PERF_TIMER(InventoryAvailability);
     if(s.bridge.healthy && s.bridge.inventory_supported && !s.bridge.pending &&
        s.bridge.inventory_scope() && s.context==botw::UiContext::World && s.data.valid &&
@@ -837,12 +837,14 @@ void sample(void *p, const EdenDsmodHostApi *h) {
       for(const auto& i:s.data.items)if(i.address==s.inventory.selected) {
         consume_available=s.bridge.consume_supported && botw::consumable(*h,i).valid;
         remove_available=s.bridge.remove_supported && i.equipped && (i.type==0 || i.type==1 || i.type==3 || (s.bridge.remove_armor_supported && i.type>=4 && i.type<=6));
+        drop_available=s.bridge.drop_supported && !i.equipped && i.value>0 && (i.type==0 || i.type==1 || i.type==3);
         equip_available=!i.equipped && ((i.value>0 && (i.type==0 || i.type==1 || i.type==3 || (s.bridge.arrows_supported && i.type==2))) ||
           (((s.bridge.lower_armor_supported && i.type==6) || (s.bridge.armor_supported && (i.type==4 || i.type==5))) && i.value>=-1 && i.value<=15));}
     }
     h->publish_i64(h->userdata,"botw.inventory.consume.available",consume_available);
     h->publish_i64(h->userdata,"botw.inventory.remove.available",remove_available);
     h->publish_i64(h->userdata,"botw.inventory.equip.available",equip_available);
+    h->publish_i64(h->userdata,"botw.inventory.drop.available",drop_available);
     { BOTW_PERF_TIMER(QuickOverlay);
     const bool touch_active=s.touch_kind!=botw::QuickKind::None;
     if(touch_active && (!s.bridge.scope() || !s.bridge.healthy || s.bridge.epoch_changed || s.touch_epoch!=s.bridge.epoch || botw::context(*h)!=botw::UiContext::World || !observed.valid || observed.kind!=botw::QuickKind::None || (!s.data.valid && s.touch_kind!=botw::QuickKind::Rune))) {
@@ -1768,6 +1770,7 @@ void sample(void *p, const EdenDsmodHostApi *h) {
     s.map_tap_deferred=false;s.map_marker_deferred=false;s.map_delete_deferred=false;s.map_selected=-1;
     h->publish_i64(h->userdata,"botw.inventory.equip.available",0);
     h->publish_i64(h->userdata,"botw.inventory.remove.available",0);
+    h->publish_i64(h->userdata,"botw.inventory.drop.available",0);
     s.bridge.cancel();
     s.recent_actor_valid={};s.recent_deferred=false; // s.recent kept (see above)
     s.quest_deferred=false;

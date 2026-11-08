@@ -31,7 +31,7 @@ struct SelectionBridge {
   uint64_t target{},cursor_screen{};
   int32_t cursor_index{-1};
   bool cursor_supported{};
-  bool healthy{},epoch_changed{},quest_supported{},inventory_supported{},lower_armor_supported{},armor_supported{},arrows_supported{},remove_supported{},remove_armor_supported{},consume_supported{},pending_consume{},pending_ready_consume{},pending_quest{},pending_inventory{};
+  bool healthy{},epoch_changed{},quest_supported{},inventory_supported{},lower_armor_supported{},armor_supported{},arrows_supported{},remove_supported{},remove_armor_supported{},consume_supported{},drop_supported{},pending_drop{},pending_consume{},pending_ready_consume{},pending_quest{},pending_inventory{};
   int32_t consume_value{};
   bool hold_supported{},pending_hold{};InventoryHold hold_before;
   bool world_rune_supported{},pending_world_rune{};uint32_t rune_refusal{};int32_t world_rune_id{-1};uint64_t world_rune_state{},world_rune_screen{};
@@ -46,11 +46,11 @@ struct SelectionBridge {
   int32_t target_quest_index{-1};
   uint64_t target_map{};
   const char* status="Selection unavailable";
-  // Guest helper mailbox magics "DUO3".."DUOG" in release order ("DUOB" was never
-  // published). Returns 1..13, or 0 for an unknown helper.
+  // Guest helper mailbox magics "DUO3".."DUOJ" in release order ("DUOB" was never
+  // published). Returns 1..16, or 0 for an unknown helper. "DUOJ" (16) adds Inventory Drop.
   static unsigned helper_level(uint32_t magic) {
     constexpr uint32_t magics[]={0x334F5544,0x344F5544,0x354F5544,0x364F5544,0x374F5544,0x384F5544,0x394F5544,
-                                 0x414F5544,0x434F5544,0x444F5544,0x454F5544,0x464F5544,0x474F5544,0x484F5544,0x494F5544};
+                                 0x414F5544,0x434F5544,0x444F5544,0x454F5544,0x464F5544,0x474F5544,0x484F5544,0x494F5544,0x4A4F5544};
     for(unsigned i=0;i<sizeof(magics)/sizeof(magics[0]);++i)if(magic==magics[i])return i+1;
     return 0;
   }
@@ -161,7 +161,7 @@ struct SelectionBridge {
     quest_supported=level>=2;inventory_supported=level>=3;lower_armor_supported=level>=4;
     armor_supported=level>=5;arrows_supported=level>=6;remove_supported=level>=7;
     remove_armor_supported=level>=8;consume_supported=level>=9;map_supported=level>=10;
-    world_rune_supported=level>=11;cursor_supported=level>=12;hold_supported=level>=13;warp_supported=level>=14;sort_supported=level>=15;
+    world_rune_supported=level>=11;cursor_supported=level>=12;hold_supported=level>=13;warp_supported=level>=14;sort_supported=level>=15;drop_supported=level>=16;
     if (healthy) note_beat(beat,now);
     healthy=healthy && heartbeat_at.time_since_epoch().count() &&
       now-heartbeat_at<health_window();
@@ -257,6 +257,20 @@ struct SelectionBridge {
         if(result==1 && valid_scope && !confirmed && now-requested<std::chrono::milliseconds(3000)) {status="Eating";return;}
         status=result==2 ? "Eat refused" : confirmed ? "Consumed" : "Eat not confirmed";
         pending=0;pending_consume=false;pending_ready_consume=false;return;
+      }
+      if (pending_inventory && pending_drop) {
+        // Inventory Drop (helper DUOJ, command 15): the guest only calls the native Hold routine,
+        // whose non-stackable branch is the game's own Drop. Success is the row leaving the pouch.
+        cancel();
+        const bool valid_scope=healthy && !epoch_changed && request_epoch==epoch &&
+          equip_scope(false) && context(h)==UiContext::World;
+        const auto fresh=valid_scope ? pouch(h) : Snapshot{};
+        const Item* chosen=nullptr;
+        if(fresh.valid)for(const auto& i:fresh.items)if(i.address==target)chosen=&i;
+        const bool confirmed=result==1 && fresh.valid && (!chosen || chosen->value<=0 || chosen->actor!=target_pouch_actor);
+        if(result==1 && valid_scope && !confirmed && now-requested<std::chrono::seconds(3)) {status="Dropping";return;}
+        status=result==2 ? "Drop refused" : confirmed ? "Dropped" : result==1 ? "Drop sent" : "Drop not confirmed";
+        pending=0;pending_inventory=false;pending_drop=false;return;
       }
       if (pending_inventory) {
         cancel();
@@ -580,13 +594,44 @@ struct SelectionBridge {
         !u32(296,uint32_t(action.fit.upper.value)))) ||
        session_epoch()!=epoch || !equip_scope(ready_scope) || context(host)!=UiContext::World ||
        !u32(72,sequence) || !u32(8,sequence)) {cancel();return false;}
-    pending=sequence;pending_remove=remove;pending_inventory=true;pending_ready_equip=ready_scope;pending_quest=false;target=address;
+    pending=sequence;pending_drop=false;pending_remove=remove;pending_inventory=true;pending_ready_equip=ready_scope;pending_quest=false;target=address;
     target_slot=action.slot;inventory_before=action.equipment;target_pouch_actor=action.item.actor;
     target_actor=action.fit.valid ? action.fit.target_actor : remove && action.slot>=3 ? "Armor_Default_Lower" : action.item.actor;
     refresh_head=action.fit.valid && action.fit.refresh_head;
     target_head_actor=action.fit.head_actor;previous_head_id=action.equipment.slots[3].id;
     previous_actor_id=old.id;
     request_epoch=epoch;requested=now;status=remove ? "Removal queued" : "Equip queued";return true;
+  }
+  // Inventory Drop: an unequipped Weapon/Bow/Shield row. The guest (command 15) revalidates the
+  // exact row and calls the native Hold routine, which drops non-stackable items itself.
+  bool request_drop(uint64_t address,const Snapshot& display) {
+    const auto now=Clock::now();uint32_t guest_epoch{};
+    const bool epoch_valid=load(4092,guest_epoch) && guest_epoch==epoch;
+    equip_refusal=(!healthy || !inventory_supported || !drop_supported || pending || !epoch || session_epoch()!=epoch || !epoch_valid || !equip_scope(false)) ? 1u : 0u;
+    if(now-sampled>std::chrono::milliseconds(100))equip_refusal|=128;
+    if(!beat_fresh(now))equip_refusal|=256;
+    if(equip_refusal)return false;
+    if(hold_supported){const auto tray=held_tray(host);if(!tray.valid||tray.count)return false;}
+    const auto action=inventory_equip(host,address,display,false,false,false,false,false,true);
+    if(!action.valid || !action.drop)return false;
+    uint32_t sequence{},ack{},beat{};
+    if(!load(8,sequence) || !load(12,ack) || sequence!=ack || !load(4,beat))return false;
+    if(++sequence==0)++sequence;
+    auto u32=[&](uint32_t at,uint32_t v){return ext.store_u32(ext.userdata,at,v)!=0;};
+    auto u64=[&](uint32_t at,uint64_t v){return ext.store_u64(ext.userdata,at,v)!=0;};
+    cancel();
+    if(!u32(16,0) || !u32(20,15) || !u32(24,7) || !u32(28,uint32_t(action.item.type)) ||
+       !u64(32,action.manager) || !u64(40,address) || !u64(48,action.ui.manager) ||
+       !u32(56,action.count) || !u32(64,beat) || !u32(76,uint32_t(action.item.value)) ||
+       !u64(80,action.name) || !u32(88,epoch) || !u64(96,action.equipment.info) ||
+       !u64(104,action.equipment.player) || !u64(112,action.equipment.creator) ||
+       !u32(124,action.modifier_flags) || !u32(128,action.modifier_value) ||
+       !u32(132,action.name_key) || !u32(304,action.column) || !u32(308,action.index) ||
+       session_epoch()!=epoch || !equip_scope(false) || context(host)!=UiContext::World ||
+       !u32(72,sequence) || !u32(8,sequence)) {cancel();return false;}
+    pending=sequence;pending_drop=true;pending_inventory=true;pending_remove=false;pending_ready_equip=false;pending_quest=false;
+    target=address;target_pouch_actor=action.item.actor;inventory_before=action.equipment;
+    request_epoch=epoch;requested=now;status="Drop queued";return true;
   }
   bool request_quest(uint64_t address,const QuestSnapshot& display) {
     const auto now=Clock::now();uint32_t guest_epoch{};

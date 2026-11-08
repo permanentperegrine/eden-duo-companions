@@ -170,6 +170,13 @@ bool handle_action(State& s,const char* action,int64_t argument) {
     }
     s.next={};return true;
   }
+  if(std::strcmp(action,"inventory_drop")==0) {
+    if(!s.bridge.request_drop(s.inventory.selected,s.data)) {
+      if(!s.bridge.pending)s.bridge.status="Drop unavailable";
+      return false;
+    }
+    s.next={};return true;
+  }
   if(std::strcmp(action,"inventory_sort")==0) {
     if(!s.data.valid || botw::inventory_items(s.data,s.inventory.category).empty() || !s.bridge.request_sort(s.inventory.category))return false;
     s.next={};return true;

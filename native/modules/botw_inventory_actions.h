@@ -5,7 +5,7 @@
 #include "botw_armor_fit.h"
 namespace botw {
 struct InventoryEquip {
-  bool valid{},remove{};
+  bool valid{},remove{},drop{};
   Item item;
   PlayerEquipmentSnapshot equipment;
   UiSample ui;
@@ -16,7 +16,7 @@ struct InventoryEquip {
 // Use the native autoEquip under its own pouch lock, then request the native
 // equipment actor. Head/upper plans include native fitting and paired completion.
 inline InventoryEquip inventory_equip(const EdenDsmodHostApi& h,uint64_t address,
-                                     const Snapshot& display,bool lower_armor=false,bool all_armor=false,bool arrows=false,bool remove=false,bool remove_armor=false) {
+                                     const Snapshot& display,bool lower_armor=false,bool all_armor=false,bool arrows=false,bool remove=false,bool remove_armor=false,bool drop=false) {
   if (!supported(h) || !display.valid || context(h)!=UiContext::World) return {};
   const auto fresh=pouch(h);
   if (!fresh.valid) return {};
@@ -25,6 +25,7 @@ inline InventoryEquip inventory_equip(const EdenDsmodHostApi& h,uint64_t address
   for(const auto& i:fresh.items)if(i.address==address)target=&i;
   if(!shown || !target || shown->actor!=target->actor || shown->type!=target->type ||
      shown->value!=target->value || shown->equipped!=target->equipped ||
+     (drop && (target->equipped || target->value<=0 || (target->type!=0 && target->type!=1 && target->type!=3))) ||
      (remove ? (!target->equipped || (target->type!=0 && target->type!=1 && target->type!=3 && !(remove_armor && target->type>=4 && target->type<=6))) : target->equipped) ||
      (((target->type==6 && lower_armor) || ((target->type==4 || target->type==5) && all_armor)) ? (target->value < -1 || target->value > 15) :
        (target->value<=0 || (target->type!=0 && target->type!=1 && target->type!=3 && !(arrows && target->type==2))))) return {};
@@ -62,9 +63,8 @@ inline InventoryEquip inventory_equip(const EdenDsmodHostApi& h,uint64_t address
        a.value!=b.value || a.equipped!=b.equipped) return {};
   }
   out.item=*target;out.count=uint32_t(count);
-  out.slot=target->type==2 ? 6 : target->type>=4 && target->type<=6 ? uint32_t(target->type-1) : target->type==0 ? 0 : target->type==3 ? 1 : 2;
-  if(remove) {
-    if(out.equipment.slots[out.slot].name!=target->actor && !(target->type==4 && out.fit.valid && out.equipment.slots[3].name==target->actor+"_B"))return {};
+  out.slot=drop ? 7 : target->type==2 ? 6 : target->type>=4 && target->type<=6 ? uint32_t(target->type-1) : target->type==0 ? 0 : target->type==3 ? 1 : 2;
+  if(remove || drop) {
     uint8_t recursive{};
     if(!read(h,out.manager+0x49,recursive) || recursive!=1)return {};
     bool found=false;
@@ -79,6 +79,10 @@ inline InventoryEquip inventory_equip(const EdenDsmodHostApi& h,uint64_t address
       }
     }
     if(!found)return {};
+  }
+  if(drop){out.drop=true;out.name_key=uint32_t(actor_key(target->actor));out.valid=true;return out;}
+  if(remove) {
+    if(out.equipment.slots[out.slot].name!=target->actor && !(target->type==4 && out.fit.valid && out.equipment.slots[3].name==target->actor+"_B"))return {};
     constexpr uint64_t defaults[]={0x2CA68F0,0x2CA6920,0x2CA6900,0x2CA6930,0x2CA6940,0x2CA6950};
     constexpr uint64_t names[]={0x265BC1E,0x2640BC8,0x2635EDB,0x262092C,0x2667123,0x2661AFE};
     uint64_t vtable{},name{};
