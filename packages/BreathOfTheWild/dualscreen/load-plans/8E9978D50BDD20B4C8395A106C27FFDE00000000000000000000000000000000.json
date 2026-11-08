@@ -48,6 +48,12 @@
           "addend": 5568
         }
       ]
+    },
+    {
+      "offset": 18607168,
+      "expected": "0881931a",
+      "replacement": "e803132a",
+      "relocations": []
     }
   ],
   "guest_code": {
